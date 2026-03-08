@@ -27,7 +27,6 @@ FitBot is a Telegram bot that acts as your personal AI fitness coach. It provide
 | Telegram Library | aiogram |
 | AI | OpenAI GPT-3.5 Turbo |
 | Config | python-dotenv |
-| Deployment | Heroku |
 
 ---
 
@@ -133,34 +132,7 @@ Just send any fitness-related message and FitBot will respond using GPT.
 
 ---
 
-## Deployment on Heroku
 
-### 1. Install Heroku CLI and login
-
-```bash
-heroku login
-```
-
-### 2. Create a Heroku app
-
-```bash
-heroku create your-app-name
-```
-
-### 3. Set environment variables
-
-```bash
-heroku config:set OPENAI_API_KEY=your_openai_api_key
-heroku config:set TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-```
-
-### 4. Deploy
-
-```bash
-git push heroku main
-```
-
----
 
 ## Project Structure
 
@@ -168,8 +140,6 @@ git push heroku main
 fitness-telegram-bot/
 ├── main.py              # Bot logic and command handlers
 ├── requirements.txt     # Python dependencies
-├── Procfile             # Heroku process config
-├── runtime.txt          # Python version for Heroku
 └── .env                 # Environment variables (not committed)
 ```
 
