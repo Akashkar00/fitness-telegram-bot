@@ -179,11 +179,6 @@ fitness-telegram-bot/
 
 Never commit your `.env` file or paste real API keys anywhere in the code or README. The `.gitignore` already excludes `.env`.
 
----
-
-## Try It Live
-
-You can test the bot directly on Telegram: [@AkashU00Bot](https://t.me/AkashU00Bot)
 
 ---
 
