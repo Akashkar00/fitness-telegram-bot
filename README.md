@@ -183,7 +183,7 @@ Never commit your `.env` file or paste real API keys anywhere in the code or REA
 
 ## Try It Live
 
-You can test the bot directly on Telegram: [@chatgpt88_bot](https://t.me/chatgpt88_bot)
+You can test the bot directly on Telegram: [@AkashU00Bot](https://t.me/AkashU00Bot)
 
 ---
 
