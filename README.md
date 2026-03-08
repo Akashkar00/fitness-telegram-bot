@@ -183,4 +183,4 @@ Never commit your `.env` file or paste real API keys anywhere in the code or REA
 
 ## Author
 
-Built by **Akash** — [GitHub](https://github.com/Akashkar00)
+Built by **Akash Kar** — NIT Rourkela | [GitHub](https://github.com/Akashkar00)
