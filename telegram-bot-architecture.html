@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Telegram Bot Architecture</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0a0a0f;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'DM Sans', sans-serif;
+    overflow: hidden;
+  }
+
+  .canvas {
+    position: relative;
+    width: 960px;
+    height: 780px;
+  }
+
+  /* Subtle grid background */
+  .canvas::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      radial-gradient(circle at 1px 1px, rgba(255,255,255,0.03) 1px, transparent 0);
+    background-size: 32px 32px;
+  }
+
+  /* ── Nodes ── */
+  .node {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    z-index: 2;
+    animation: fadeUp 0.6s ease-out both;
+  }
+
+  /* User */
+  .node--user {
+    left: 40px; top: 290px;
+    width: 88px; height: 88px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1, #818cf8);
+    color: #fff;
+    font-size: 14px;
+    box-shadow: 0 0 40px rgba(99,102,241,0.25);
+    animation-delay: 0.1s;
+  }
+
+  /* Telegram container */
+  .node--telegram {
+    left: 220px; top: 230px;
+    width: 400px; height: 170px;
+    border: 2px solid rgba(0, 136, 204, 0.5);
+    border-radius: 16px;
+    background: rgba(0, 136, 204, 0.06);
+    backdrop-filter: blur(4px);
+    flex-direction: column;
+    justify-content: flex-start;
+    animation-delay: 0.15s;
+  }
+
+  .telegram-label {
+    position: absolute;
+    bottom: -32px;
+    right: 16px;
+    font-size: 13px;
+    font-family: 'JetBrains Mono', monospace;
+    color: rgba(0, 136, 204, 0.7);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .telegram-inner {
+    display: flex;
+    gap: 32px;
+    padding: 48px 32px 24px;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .handler {
+    padding: 14px 22px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    color: #e2e8f0;
+    border: 1.5px solid rgba(255,255,255,0.12);
+    background: rgba(255,255,255,0.04);
+    white-space: nowrap;
+    transition: all 0.3s;
+  }
+  .handler:hover {
+    border-color: rgba(255,255,255,0.25);
+    background: rgba(255,255,255,0.08);
+  }
+
+  /* Command Route diamond */
+  .node--route {
+    left: 340px; top: 60px;
+    width: 120px; height: 120px;
+    animation-delay: 0.25s;
+  }
+
+  .diamond {
+    width: 100px; height: 100px;
+    background: rgba(251, 191, 36, 0.1);
+    border: 2px solid rgba(251, 191, 36, 0.6);
+    transform: rotate(45deg);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s;
+  }
+  .diamond:hover {
+    background: rgba(251, 191, 36, 0.18);
+    box-shadow: 0 0 30px rgba(251, 191, 36, 0.15);
+  }
+
+  .diamond-text {
+    transform: rotate(-45deg);
+    font-size: 12px;
+    font-weight: 700;
+    color: #fbbf24;
+    font-family: 'JetBrains Mono', monospace;
+    text-align: center;
+    line-height: 1.3;
+  }
+
+  /* LLM */
+  .node--llm {
+    left: 740px; top: 68px;
+    width: 130px; height: 70px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #10b981, #34d399);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+    box-shadow: 0 0 40px rgba(16,185,129,0.2);
+    animation-delay: 0.3s;
+  }
+
+  /* Condition */
+  .node--condition {
+    left: 120px; top: 460px;
+    width: 110px; height: 60px;
+    border-radius: 12px;
+    background: rgba(244, 63, 94, 0.1);
+    border: 2px solid rgba(244, 63, 94, 0.5);
+    color: #fb7185;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    animation-delay: 0.35s;
+  }
+
+  /* Temporary Memory */
+  .node--memory {
+    left: 320px; top: 560px;
+    width: 320px; height: 110px;
+    border: 2px solid rgba(168, 85, 247, 0.5);
+    border-radius: 16px;
+    background: rgba(168, 85, 247, 0.06);
+    backdrop-filter: blur(4px);
+    flex-direction: column;
+    gap: 6px;
+    animation-delay: 0.4s;
+  }
+
+  .memory-item {
+    font-size: 13px;
+    font-family: 'JetBrains Mono', monospace;
+    color: #c4b5fd;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+  }
+
+  .memory-label {
+    position: absolute;
+    bottom: -32px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 13px;
+    font-family: 'JetBrains Mono', monospace;
+    color: rgba(168, 85, 247, 0.7);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  /* ── SVG Arrows ── */
+  svg.arrows {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+    pointer-events: none;
+  }
+
+  .arrow-path {
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .arrow-path--primary { stroke: rgba(255,255,255,0.35); }
+  .arrow-path--accent  { stroke: rgba(99,102,241,0.5); }
+  .arrow-path--green   { stroke: rgba(16,185,129,0.5); }
+  .arrow-path--yellow  { stroke: rgba(251,191,36,0.45); }
+  .arrow-path--red     { stroke: rgba(244,63,94,0.45); }
+  .arrow-path--purple  { stroke: rgba(168,85,247,0.5); }
+
+  marker polygon { }
+
+  /* ── Arrow Labels ── */
+  .arrow-label {
+    position: absolute;
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    color: rgba(255,255,255,0.4);
+    letter-spacing: 0.04em;
+    z-index: 3;
+    pointer-events: none;
+  }
+
+  /* ── Animations ── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Flow dots ── */
+  .flow-dot {
+    r: 3;
+    fill: #818cf8;
+    opacity: 0.8;
+  }
+
+  /* Title */
+  .title {
+    position: absolute;
+    top: 10px; left: 0; right: 0;
+    text-align: center;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: rgba(255,255,255,0.25);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<div class="canvas">
+  <div class="title">Telegram Bot — System Architecture</div>
+
+  <!-- SVG Arrows -->
+  <svg class="arrows" viewBox="0 0 960 780">
+    <defs>
+      <marker id="ah-white" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="rgba(255,255,255,0.4)" />
+      </marker>
+      <marker id="ah-indigo" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="rgba(99,102,241,0.6)" />
+      </marker>
+      <marker id="ah-green" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="rgba(16,185,129,0.6)" />
+      </marker>
+      <marker id="ah-yellow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="rgba(251,191,36,0.55)" />
+      </marker>
+      <marker id="ah-red" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="rgba(244,63,94,0.55)" />
+      </marker>
+      <marker id="ah-purple" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="rgba(168,85,247,0.6)" />
+      </marker>
+
+      <!-- Animated dot -->
+      <circle id="dot" r="3" fill="#818cf8" opacity="0.9"/>
+    </defs>
+
+    <!-- 1. User → Command Handler -->
+    <path id="p1" class="arrow-path arrow-path--accent"
+          d="M 128,334 L 290,314"
+          marker-end="url(#ah-indigo)" />
+    <circle class="flow-dot" fill="#818cf8">
+      <animateMotion dur="2.5s" repeatCount="indefinite">
+        <mpath href="#p1"/>
+      </animateMotion>
+    </circle>
+
+    <!-- 2. Command Handler → Command Route -->
+    <path id="p2" class="arrow-path arrow-path--yellow"
+          d="M 355,255 L 388,178"
+          marker-end="url(#ah-yellow)" />
+    <circle class="flow-dot" fill="#fbbf24">
+      <animateMotion dur="2s" repeatCount="indefinite">
+        <mpath href="#p2"/>
+      </animateMotion>
+    </circle>
+
+    <!-- 3. Command Route → LLM Handler (yes/LLM path) -->
+    <path id="p3" class="arrow-path arrow-path--yellow"
+          d="M 460,120 L 490,290"
+          marker-end="url(#ah-yellow)" />
+    <text x="476" y="205" fill="rgba(251,191,36,0.5)" font-size="10" font-family="JetBrains Mono">LLM</text>
+
+    <!-- 4. Command Route → Command Handler (cmd path, loops back) -->
+    <path id="p4" class="arrow-path arrow-path--yellow"
+          d="M 340,105 C 250,80 250,240 295,290"
+          marker-end="url(#ah-yellow)" />
+    <text x="232" y="165" fill="rgba(251,191,36,0.5)" font-size="10" font-family="JetBrains Mono">CMD</text>
+
+    <!-- 5. LLM Handler → LLM -->
+    <path id="p5" class="arrow-path arrow-path--green"
+          d="M 530,290 C 660,250 700,140 740,108"
+          marker-end="url(#ah-green)" />
+    <circle class="flow-dot" fill="#34d399">
+      <animateMotion dur="2.2s" repeatCount="indefinite">
+        <mpath href="#p5"/>
+      </animateMotion>
+    </circle>
+
+    <!-- 6. LLM → LLM Handler (response) -->
+    <path id="p6" class="arrow-path arrow-path--green"
+          d="M 780,138 C 800,260 680,340 555,330"
+          marker-end="url(#ah-green)" />
+    <circle class="flow-dot" fill="#10b981">
+      <animateMotion dur="2.4s" repeatCount="indefinite">
+        <mpath href="#p6"/>
+      </animateMotion>
+    </circle>
+
+    <!-- 7. Telegram → Condition -->
+    <path id="p7" class="arrow-path arrow-path--red"
+          d="M 350,400 C 300,450 230,470 230,490"
+          marker-end="url(#ah-red)" />
+
+    <!-- 8. Condition → User -->
+    <path id="p8" class="arrow-path arrow-path--red"
+          d="M 120,490 C 60,490 50,420 72,375"
+          marker-end="url(#ah-red)" />
+    <circle class="flow-dot" fill="#fb7185">
+      <animateMotion dur="2s" repeatCount="indefinite">
+        <mpath href="#p8"/>
+      </animateMotion>
+    </circle>
+
+    <!-- 9. LLM → Command Route (feedback?) -->
+    <path id="p9" class="arrow-path arrow-path--primary"
+          d="M 740,80 C 600,40 500,50 460,72"
+          marker-end="url(#ah-white)"
+          stroke-dasharray="6 4" />
+
+    <!-- 10. Telegram → Temporary Memory -->
+    <path id="p10" class="arrow-path arrow-path--purple"
+          d="M 420,400 L 420,440 L 480,560"
+          marker-end="url(#ah-purple)" />
+    <circle class="flow-dot" fill="#a855f7">
+      <animateMotion dur="2.3s" repeatCount="indefinite">
+        <mpath href="#p10"/>
+      </animateMotion>
+    </circle>
+
+    <!-- 11. Temporary Memory → Telegram (read back) -->
+    <path id="p11" class="arrow-path arrow-path--purple"
+          d="M 380,560 L 380,440 L 380,400"
+          marker-end="url(#ah-purple)"
+          stroke-dasharray="6 4" />
+    <circle class="flow-dot" fill="#c084fc" opacity="0.6">
+      <animateMotion dur="2.6s" repeatCount="indefinite">
+        <mpath href="#p11"/>
+      </animateMotion>
+    </circle>
+  </svg>
+
+  <!-- User Node -->
+  <div class="node node--user">User</div>
+
+  <!-- Telegram Container -->
+  <div class="node node--telegram">
+    <div class="telegram-inner">
+      <div class="handler">commandHandler</div>
+      <div class="handler">LLM Handler</div>
+    </div>
+    <span class="telegram-label">Telegram</span>
+  </div>
+
+  <!-- Command Route -->
+  <div class="node node--route">
+    <div class="diamond">
+      <span class="diamond-text">Command<br>Route</span>
+    </div>
+  </div>
+
+  <!-- LLM -->
+  <div class="node node--llm">LLM</div>
+
+  <!-- Condition -->
+  <div class="node node--condition">condition</div>
+
+  <!-- Temporary Memory -->
+  <div class="node node--memory">
+    <span class="memory-item">past reference</span>
+    <span class="memory-item">clear reference</span>
+    <span class="memory-label">Temporary Memory</span>
+  </div>
+
+  <!-- Arrow labels -->
+  <span class="arrow-label" style="left:155px;top:298px;">message</span>
+  <span class="arrow-label" style="left:60px;top:420px;">response</span>
+  <span class="arrow-label" style="left:490px;top:488px;color:rgba(168,85,247,0.5);">store</span>
+  <span class="arrow-label" style="left:345px;top:488px;color:rgba(168,85,247,0.5);">recall</span>
+</div>
+
+</body>
+</html>
