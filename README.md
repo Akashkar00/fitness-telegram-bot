@@ -28,13 +28,3 @@ OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TELEGRAM_BOT_TOKEN=xxxxxxxxxx:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-
-
-# Docker Buid command:
-
-docker build -t telegram-telebot .
-
-
-# Run the Docker container with the following command, replacing the API key and bot token with your actual values:
-
-docker run --rm -e OPENAI_API_KEY=your_openai_api_key -e TELEGRAM_BOT_TOKEN=your_telegram_bot_token telegram-telebot
