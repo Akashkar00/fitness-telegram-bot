@@ -1,6 +1,6 @@
 # FitBot - AI Fitness Telegram Bot
 
-FitBot is a Telegram bot that acts as your personal AI fitness coach. It provides workout plans, fitness calculators, nutrition tips, cardio routines, stretching guides, sleep advice, and an AI-powered chat powered by OpenAI GPT.
+FitBot is a Telegram bot that acts as your personal AI fitness coach. It provides workout plans, fitness calculators, nutrition tips, cardio routines, stretching guides, sleep advice, a personal workout & running tracker with weekly charts, and an AI-powered chat powered by OpenAI GPT.
 
 ---
 
@@ -15,6 +15,9 @@ FitBot is a Telegram bot that acts as your personal AI fitness coach. It provide
 - **Nutrition Tips** — Randomized diet and macro guidance
 - **Sleep & Recovery Tips** — Evidence-based rest advice
 - **Motivation Quotes** — Daily fitness inspiration
+- **🏋️ Workout Tracker** — Log gym sets, view today's log, weekly summary with chart
+- **🏃 Running Tracker** — Log runs with auto-calculated pace, weekly km summary
+- **📊 Weekly Chart** — 3-panel chart: daily gym volume, volume by exercise, daily running distance
 - **AI Chat** — Ask any fitness question and get a GPT-powered response
 
 ---
@@ -23,9 +26,11 @@ FitBot is a Telegram bot that acts as your personal AI fitness coach. It provide
 
 | Component | Technology |
 |---|---|
-| Language | Python 3.11 |
-| Telegram Library | aiogram |
+| Language | Python 3.11+ |
+| Telegram Library | aiogram v3 |
 | AI | OpenAI GPT-3.5 Turbo |
+| Database | SQLite (via `sqlite3`) |
+| Charts | Matplotlib |
 | Config | python-dotenv |
 
 ---
@@ -42,15 +47,15 @@ cd fitness-telegram-bot
 ### 2. Create a virtual environment
 
 ```bash
-conda create -n fitbot python=3.11 -y
-conda activate fitbot
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 ```
 
-Or with venv:
+Or with conda:
 
 ```bash
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+conda create -n fitbot python=3.11 -y
+conda activate fitbot
 ```
 
 ### 3. Install dependencies
@@ -127,18 +132,39 @@ python main.py
 | `/sleep` | Sleep & recovery tips |
 | `/challenge` | Today's fitness challenge |
 
+### 🏋️ Workout Tracker
+| Command | Example | Description |
+|---|---|---|
+| `/log <exercise> <weight>kg <sets>x<reps>` | `/log bench 80kg 3x10` | Log a gym set |
+| `/today` | `/today` | View today's gym + running activity |
+| `/summary` | `/summary` | 7-day report + chart |
+| `/delete` | `/delete` | Clear all your tracker data |
+
+### 🏃 Running Tracker
+| Command | Example | Description |
+|---|---|---|
+| `/run <distance>km <duration>min` | `/run 5km 28min` | Log a run (pace auto-calculated) |
+| `/runs` | `/runs` | View today's runs with pace |
+| `/today` | `/today` | View today's gym + running combined |
+| `/summary` | `/summary` | 7-day running stats + chart |
+
+### 📊 Weekly Summary Chart (`/summary`)
+The chart has **3 panels**:
+1. **Daily Gym Volume (kg)** — bar chart of total volume per day
+2. **Volume by Exercise (kg)** — horizontal bars per exercise
+3. **Daily Running Distance (km)** — bar chart of km per day _(only shown if you have runs logged)_
+
 ### AI Chat
 Just send any fitness-related message and FitBot will respond using GPT.
 
 ---
 
-
-
 ## Project Structure
 
 ```
 fitness-telegram-bot/
-├── main.py              # Bot logic and command handlers
+├── main.py              # Bot logic, command handlers, tracker
+├── fitness.db           # SQLite database (auto-created, not committed)
 ├── requirements.txt     # Python dependencies
 └── .env                 # Environment variables (not committed)
 ```
@@ -147,8 +173,7 @@ fitness-telegram-bot/
 
 ## Security Note
 
-Never commit your `.env` file or paste real API keys anywhere in the code or README. The `.gitignore` already excludes `.env`.
-
+Never commit your `.env` file or paste real API keys anywhere in the code or README. The `.gitignore` already excludes `.env` and `fitness.db`.
 
 ---
 
