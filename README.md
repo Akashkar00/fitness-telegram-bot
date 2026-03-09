@@ -17,7 +17,8 @@ FitBot is a Telegram bot that acts as your personal AI fitness coach. It provide
 - **Motivation Quotes** — Daily fitness inspiration
 - **🏋️ Workout Tracker** — Log gym sets, view today's log, weekly summary with chart
 - **🏃 Running Tracker** — Log runs with auto-calculated pace, weekly km summary
-- **📊 Weekly Chart** — 3-panel chart: daily gym volume, volume by exercise, daily running distance
+- **⚖️ Weight Tracker** — Log daily body weight, 30-day trend chart, weekly improvement stats
+- **📊 Weekly Chart** — Up to 4-panel chart: gym volume, exercise breakdown, running distance, body weight trend
 - **AI Chat** — Ask any fitness question and get a GPT-powered response
 
 ---
@@ -148,11 +149,21 @@ python main.py
 | `/today` | `/today` | View today's gym + running combined |
 | `/summary` | `/summary` | 7-day running stats + chart |
 
+### ⚖️ Weight Tracker
+| Command | Example | Description |
+|---|---|---|
+| `/weight <kg>` | `/weight 74.5` | Log today's body weight (one entry per day, updates if re-logged) |
+| `/weightlog` | `/weightlog` | 30-day weight trend with line chart |
+| `/summary` | `/summary` | Weekly weight change, % improvement |
+
 ### 📊 Weekly Summary Chart (`/summary`)
-The chart has **3 panels**:
+The chart dynamically shows up to **4 panels** based on your data:
 1. **Daily Gym Volume (kg)** — bar chart of total volume per day
 2. **Volume by Exercise (kg)** — horizontal bars per exercise
-3. **Daily Running Distance (km)** — bar chart of km per day _(only shown if you have runs logged)_
+3. **Daily Running Distance (km)** — bar chart of km per day _(shown if you have runs)_
+4. **Body Weight Trend (kg)** — line chart with dots _(shown if you have weight entries)_
+
+The text summary also shows **weight improvement**: change in kg, direction (📈/📉), start→now, and % of body weight lost/gained.
 
 ### AI Chat
 Just send any fitness-related message and FitBot will respond using GPT.
