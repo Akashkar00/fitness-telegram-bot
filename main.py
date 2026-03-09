@@ -54,6 +54,15 @@ def init_db():
                 duration_min REAL    NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS weight_log (
+                id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                date    TEXT    NOT NULL,
+                weight  REAL    NOT NULL,
+                UNIQUE(user_id, date)
+            )
+        """)
         conn.commit()
 
 init_db()
@@ -85,15 +94,26 @@ def _get_week_runs(user_id):
             WHERE user_id=? AND date>=? ORDER BY date
         """, (user_id, _week_since())).fetchall()
 
-def _build_chart(by_date: dict, by_exercise: dict, run_by_date: dict) -> BytesIO:
-    has_runs = bool(run_by_date)
-    rows = 3 if has_runs else 2
-    fig, axes = plt.subplots(rows, 1, figsize=(9, rows * 4 + 1))
-    if rows == 2:
-        ax1, ax2 = axes
-        ax3 = None
+def _build_chart(by_date: dict, by_exercise: dict, run_by_date: dict, weight_by_date: dict = None) -> BytesIO:
+    has_runs    = bool(run_by_date)
+    has_weights = bool(weight_by_date)
+    num_panels  = 2 + int(has_runs) + int(has_weights)
+
+    fig, axes = plt.subplots(num_panels, 1, figsize=(9, num_panels * 4 + 1))
+    if num_panels == 1:
+        axes = [axes]
+    ax1, ax2 = axes[0], axes[1]
+    ax3 = axes[2] if num_panels >= 3 else None
+    ax4 = axes[3] if num_panels == 4 else None
+    # If only 3 panels with no runs but has weights
+    if has_runs and not has_weights:
+        ax3_run, ax4 = axes[2], None
+    elif not has_runs and has_weights:
+        ax3_run, ax3_wt = None, axes[2]
+    elif has_runs and has_weights:
+        ax3_run, ax3_wt = axes[2], axes[3]
     else:
-        ax1, ax2, ax3 = axes
+        ax3_run, ax3_wt = None, None
 
     fig.patch.set_facecolor("#1a1a2e")
     for ax in axes:
@@ -132,20 +152,40 @@ def _build_chart(by_date: dict, by_exercise: dict, run_by_date: dict) -> BytesIO
                      f"{v:.0f}", va="center", color="white", fontsize=9, fontweight="bold")
 
     # Panel 3 — Daily running distance
-    if ax3 is not None:
-        run_dates = sorted(run_by_date)
+    if ax3_run is not None:
+        run_dates  = sorted(run_by_date)
         run_labels = [datetime.strptime(d, "%Y-%m-%d").strftime("%a\n%d %b") for d in run_dates]
-        run_dists = [run_by_date[d] for d in run_dates]
-        bars3 = ax3.bar(run_labels, run_dists, color="#00b4d8", edgecolor="#0f3460", linewidth=1.2)
-        ax3.set_title("Daily Running Distance (km)", fontsize=13, fontweight="bold", pad=8)
-        ax3.set_ylabel("Distance (km)")
+        run_dists  = [run_by_date[d] for d in run_dates]
+        bars3 = ax3_run.bar(run_labels, run_dists, color="#00b4d8", edgecolor="#0f3460", linewidth=1.2)
+        ax3_run.set_title("Daily Running Distance (km)", fontsize=13, fontweight="bold", pad=8)
+        ax3_run.set_ylabel("Distance (km)")
         if run_dists:
-            ax3.set_ylim(0, max(run_dists) * 1.25)
+            ax3_run.set_ylim(0, max(run_dists) * 1.25)
             for bar, v in zip(bars3, run_dists):
-                ax3.text(bar.get_x() + bar.get_width() / 2,
-                         bar.get_height() + max(run_dists) * 0.02,
-                         f"{v:.1f}", ha="center", va="bottom",
-                         color="white", fontsize=9, fontweight="bold")
+                ax3_run.text(bar.get_x() + bar.get_width() / 2,
+                             bar.get_height() + max(run_dists) * 0.02,
+                             f"{v:.1f}", ha="center", va="bottom",
+                             color="white", fontsize=9, fontweight="bold")
+
+    # Panel 4 — Body weight trend
+    if ax3_wt is not None and weight_by_date:
+        wt_dates  = sorted(weight_by_date)
+        wt_labels = [datetime.strptime(d, "%Y-%m-%d").strftime("%a\n%d %b") for d in wt_dates]
+        wt_vals   = [weight_by_date[d] for d in wt_dates]
+        ax3_wt.plot(wt_labels, wt_vals, color="#a8dadc", linewidth=2.5,
+                    marker="o", markersize=7,
+                    markerfacecolor="#e94560", markeredgecolor="white", markeredgewidth=1)
+        ax3_wt.fill_between(range(len(wt_vals)), wt_vals,
+                            min(wt_vals) - 0.3, alpha=0.15, color="#a8dadc")
+        ax3_wt.set_title("Body Weight (kg)", fontsize=13, fontweight="bold", pad=8)
+        ax3_wt.set_ylabel("Weight (kg)")
+        ax3_wt.set_ylim(min(wt_vals) - 1, max(wt_vals) + 1)
+        ax3_wt.set_xticks(range(len(wt_labels)))
+        ax3_wt.set_xticklabels(wt_labels, fontsize=8)
+        for i, (lbl, v) in enumerate(zip(wt_labels, wt_vals)):
+            ax3_wt.annotate(f"{v}kg", (i, v),
+                            textcoords="offset points", xytext=(0, 8),
+                            ha="center", color="white", fontsize=8)
 
     plt.tight_layout(pad=3)
     buf = BytesIO()
@@ -466,9 +506,12 @@ async def helper(message: types.Message):
         "    e.g. `/log bench 80kg 3x10`\n"
         "🏃 /run `<dist>km <time>min` — Log a run\n"
         "    e.g. `/run 5km 28min`\n"
+        "⚖️ /weight `<kg>` — Log today's body weight\n"
+        "    e.g. `/weight 74.5`\n"
         "📋 /today — Today's gym + running log\n"
         "🏃 /runs — Today's runs only\n"
         "📊 /summary — Weekly report + chart\n"
+        "📉 /weightlog — 30-day body weight trend\n"
         "🗑 /delete — Clear all your tracker data\n\n"
         "💬 Or just send me any fitness question!"
     )
@@ -988,8 +1031,19 @@ async def weekly_summary(message: types.Message):
     gym_rows = _get_week_workouts(uid)
     run_rows  = _get_week_runs(uid)
 
-    if not gym_rows and not run_rows:
-        await message.answer("No activity in the past 7 days. Start with `/log` or `/run`!")
+    # Weekly weight data
+    weight_by_date = {}
+    with sqlite3.connect(DB_PATH) as conn:
+        wt_rows = conn.execute("""
+            SELECT date, weight FROM weight_log
+            WHERE user_id=? AND date>=?
+            ORDER BY date
+        """, (uid, _week_since())).fetchall()
+    for date, w in wt_rows:
+        weight_by_date[date] = w
+
+    if not gym_rows and not run_rows and not wt_rows:
+        await message.answer("No activity in the past 7 days. Start with `/log`, `/run`, or `/weight`!")
         return
 
     by_date     = defaultdict(list)
@@ -1026,9 +1080,25 @@ async def weekly_summary(message: types.Message):
         for d in sorted(run_by_date):
             lines.append(f"  📅 {datetime.strptime(d, '%Y-%m-%d').strftime('%a %d %b')} — {run_by_date[d]:.1f}km")
 
+    if wt_rows:
+        first_w, last_w = wt_rows[0][1], wt_rows[-1][1]
+        change = last_w - first_w
+        arrow = "📉" if change < 0 else ("📈" if change > 0 else "➡️")
+        lines.append("\n⚖️ *Body Weight (this week):*")
+        for date, w in wt_rows:
+            lines.append(f"  📅 {datetime.strptime(date, '%Y-%m-%d').strftime('%a %d %b')} — *{w} kg*")
+        if len(wt_rows) >= 2:
+            lines.append(f"\n{arrow} *Weight Change:* {change:+.1f} kg")
+            lines.append(f"  Start: {first_w}kg → Now: {last_w}kg")
+            if first_w > 0:
+                pct = abs(change) / first_w * 100
+                direction = "lost" if change < 0 else ("gained" if change > 0 else "maintained")
+                lines.append(f"  You {direction} *{pct:.1f}%* of your body weight")
+
     await message.answer("\n".join(lines))
-    chart = _build_chart(by_date, by_exercise, run_by_date)
-    await message.answer_photo(chart, caption="📈 Your 7-day fitness chart")
+    if gym_rows:  # Only build chart if there's gym data
+        chart = _build_chart(by_date, by_exercise, run_by_date, weight_by_date)
+        await message.answer_photo(chart, caption="📈 Your 7-day fitness chart")
 
 
 @dp.message(Command('delete'))
@@ -1037,8 +1107,108 @@ async def delete_tracker(message: types.Message):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("DELETE FROM workouts WHERE user_id=?", (uid,))
         conn.execute("DELETE FROM runs WHERE user_id=?", (uid,))
+        conn.execute("DELETE FROM weight_log WHERE user_id=?", (uid,))
         conn.commit()
-    await message.answer("🗑 All your workout and running data has been deleted.")
+    await message.answer("🗑 All your workout, running, and weight data has been deleted.")
+
+
+@dp.message(Command('weight'))
+async def log_weight(message: types.Message, command: CommandObject):
+    args = (command.args or "").strip()
+    try:
+        kg = float(args)
+        if kg <= 0 or kg > 500:
+            raise ValueError
+    except Exception:
+        await message.answer(
+            "❌ Format: `/weight <kg>`\n"
+            "Example: `/weight 74.5`"
+        )
+        return
+
+    with sqlite3.connect(DB_PATH) as conn:
+        # UPSERT — one entry per day
+        conn.execute("""
+            INSERT INTO weight_log (user_id, date, weight)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, date) DO UPDATE SET weight=excluded.weight
+        """, (message.from_user.id, _today(), kg))
+        conn.commit()
+    await message.answer(
+        f"⚖️ Weight logged: *{kg} kg* on {_today()}\n"
+        f"_Use /weightlog to see your trend._"
+    )
+
+
+@dp.message(Command('weightlog'))
+async def weight_log_handler(message: types.Message):
+    uid = message.from_user.id
+    since = (datetime.now() - timedelta(days=29)).strftime("%Y-%m-%d")
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("""
+            SELECT date, weight FROM weight_log
+            WHERE user_id=? AND date>=?
+            ORDER BY date
+        """, (uid, since)).fetchall()
+
+    if not rows:
+        await message.answer(
+            "No weight entries yet.\nUse `/weight 74.5` to log today's weight."
+        )
+        return
+
+    # Text summary
+    first_w, last_w = rows[0][1], rows[-1][1]
+    change = last_w - first_w
+    arrow = "📉" if change < 0 else ("📈" if change > 0 else "➡️")
+    lines = ["⚖️ *Body Weight Log (last 30 days)*\n"]
+    for date, w in rows:
+        day = datetime.strptime(date, "%Y-%m-%d").strftime("%a %d %b")
+        lines.append(f"  • {day}: *{w} kg*")
+    lines.append(f"\n{arrow} Change: *{change:+.1f} kg* ({rows[0][1]}kg → {rows[-1][1]}kg)")
+    await message.answer("\n".join(lines))
+
+    # Line chart
+    dates = [r[0] for r in rows]
+    weights = [r[1] for r in rows]
+    day_labels = [datetime.strptime(d, "%Y-%m-%d").strftime("%d %b") for d in dates]
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    fig.patch.set_facecolor("#1a1a2e")
+    ax.set_facecolor("#16213e")
+    ax.tick_params(colors="white")
+    ax.spines[:].set_color("#0f3460")
+    ax.yaxis.label.set_color("white")
+    ax.xaxis.label.set_color("white")
+    ax.title.set_color("white")
+
+    ax.plot(day_labels, weights, color="#00b4d8", linewidth=2.5, marker="o",
+            markersize=6, markerfacecolor="#e94560", markeredgecolor="white", markeredgewidth=1)
+    ax.fill_between(range(len(weights)), weights,
+                    min(weights) - 0.5, alpha=0.15, color="#00b4d8")
+    ax.set_title("Body Weight Trend (last 30 days)", fontsize=13, fontweight="bold", pad=10)
+    ax.set_ylabel("Weight (kg)")
+    ax.set_ylim(min(weights) - 1, max(weights) + 1)
+
+    # Rotate x labels if many entries
+    step = max(1, len(day_labels) // 10)
+    ax.set_xticks(range(0, len(day_labels), step))
+    ax.set_xticklabels(day_labels[::step], rotation=30, ha="right", fontsize=8)
+
+    # Annotate first and last
+    ax.annotate(f"{weights[0]}kg", (0, weights[0]),
+                textcoords="offset points", xytext=(5, 8),
+                color="white", fontsize=8)
+    ax.annotate(f"{weights[-1]}kg", (len(weights) - 1, weights[-1]),
+                textcoords="offset points", xytext=(-30, 8),
+                color="#e94560", fontsize=9, fontweight="bold")
+
+    plt.tight_layout()
+    buf = BytesIO()
+    plt.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    await message.answer_photo(buf, caption=f"📉 Weight trend: {first_w}kg → {last_w}kg ({change:+.1f}kg)")
 
 
 # ─── AI Chat Handler (Fitness Expert) ─────────────────────────────────────────
