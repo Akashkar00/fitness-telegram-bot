@@ -2,6 +2,8 @@
 
 FitBot is a Telegram bot that acts as your personal AI fitness coach. It provides workout plans, fitness calculators, nutrition tips, cardio routines, stretching guides, sleep advice, a personal workout & running tracker with weekly charts, and an AI-powered chat powered by OpenAI GPT.
 
+[**🤖 Try the live bot here: @AkashU00Bot**](https://t.me/AkashU00Bot)
+
 ---
 
 ## Features
