@@ -1,22 +1,158 @@
 import logging
 import random
 import math
-from datetime import datetime
-from aiogram import Bot, Dispatcher, executor, types
-import openai
+import sqlite3
+from collections import defaultdict
+from datetime import datetime, timedelta
+from io import BytesIO
+
+import matplotlib.pyplot as plt
+from aiogram import Bot, Dispatcher, types
+from aiogram.enums import ParseMode
+from aiogram.filters import Command, CommandObject
+from aiogram.client.default import DefaultBotProperties
+import asyncio
+from openai import AsyncOpenAI
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # ─── Config ────────────────────────────────────────────────────────────────────
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 logging.basicConfig(level=logging.INFO)
 
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
-dispatcher = Dispatcher(bot)
+bot = Bot(token=TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
+dp = Dispatcher()
+
+
+# ─── Workout & Run DB ─────────────────────────────────────────────────────────
+
+DB_PATH = "fitness.db"
+
+def init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS workouts (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id   INTEGER NOT NULL,
+                date      TEXT    NOT NULL,
+                exercise  TEXT    NOT NULL,
+                sets      INTEGER NOT NULL,
+                reps      INTEGER NOT NULL,
+                weight_kg REAL    NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS runs (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER NOT NULL,
+                date         TEXT    NOT NULL,
+                distance_km  REAL    NOT NULL,
+                duration_min REAL    NOT NULL
+            )
+        """)
+        conn.commit()
+
+init_db()
+
+
+def _today() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+def _pace_str(dist: float, dur: float) -> str:
+    if dist <= 0:
+        return "N/A"
+    p = dur / dist
+    return f"{int(p)}:{int((p - int(p)) * 60):02d} min/km"
+
+def _week_since() -> str:
+    return (datetime.now() - timedelta(days=6)).strftime("%Y-%m-%d")
+
+def _get_week_workouts(user_id):
+    with sqlite3.connect(DB_PATH) as conn:
+        return conn.execute("""
+            SELECT date, exercise, sets, reps, weight_kg FROM workouts
+            WHERE user_id=? AND date>=? ORDER BY date, exercise
+        """, (user_id, _week_since())).fetchall()
+
+def _get_week_runs(user_id):
+    with sqlite3.connect(DB_PATH) as conn:
+        return conn.execute("""
+            SELECT date, distance_km, duration_min FROM runs
+            WHERE user_id=? AND date>=? ORDER BY date
+        """, (user_id, _week_since())).fetchall()
+
+def _build_chart(by_date: dict, by_exercise: dict, run_by_date: dict) -> BytesIO:
+    has_runs = bool(run_by_date)
+    rows = 3 if has_runs else 2
+    fig, axes = plt.subplots(rows, 1, figsize=(9, rows * 4 + 1))
+    if rows == 2:
+        ax1, ax2 = axes
+        ax3 = None
+    else:
+        ax1, ax2, ax3 = axes
+
+    fig.patch.set_facecolor("#1a1a2e")
+    for ax in axes:
+        ax.set_facecolor("#16213e")
+        ax.tick_params(colors="white")
+        ax.spines[:].set_color("#0f3460")
+        ax.yaxis.label.set_color("white")
+        ax.xaxis.label.set_color("white")
+        ax.title.set_color("white")
+
+    # Panel 1 — Daily gym volume
+    dates = sorted(by_date)
+    day_labels = [datetime.strptime(d, "%Y-%m-%d").strftime("%a\n%d %b") for d in dates]
+    day_vols = [sum(s * r * w for _, s, r, w in by_date[d]) for d in dates]
+    bars1 = ax1.bar(day_labels, day_vols, color="#e94560", edgecolor="#0f3460", linewidth=1.2)
+    ax1.set_title("Daily Gym Volume (kg)", fontsize=13, fontweight="bold", pad=8)
+    ax1.set_ylabel("Volume (kg)")
+    if day_vols:
+        ax1.set_ylim(0, max(day_vols) * 1.25)
+        for bar, v in zip(bars1, day_vols):
+            ax1.text(bar.get_x() + bar.get_width() / 2,
+                     bar.get_height() + max(day_vols) * 0.02,
+                     f"{v:.0f}", ha="center", va="bottom",
+                     color="white", fontsize=9, fontweight="bold")
+
+    # Panel 2 — Volume by exercise
+    exs = sorted(by_exercise, key=lambda x: by_exercise[x])
+    vols = [by_exercise[e] for e in exs]
+    colors = plt.cm.plasma([i / max(len(exs), 1) for i in range(len(exs))])
+    hbars = ax2.barh(exs, vols, color=colors, edgecolor="#0f3460")
+    ax2.set_title("Volume by Exercise (kg)", fontsize=13, fontweight="bold", pad=8)
+    ax2.set_xlabel("Volume (kg)")
+    if vols:
+        for bar, v in zip(hbars, vols):
+            ax2.text(v + max(vols) * 0.01, bar.get_y() + bar.get_height() / 2,
+                     f"{v:.0f}", va="center", color="white", fontsize=9, fontweight="bold")
+
+    # Panel 3 — Daily running distance
+    if ax3 is not None:
+        run_dates = sorted(run_by_date)
+        run_labels = [datetime.strptime(d, "%Y-%m-%d").strftime("%a\n%d %b") for d in run_dates]
+        run_dists = [run_by_date[d] for d in run_dates]
+        bars3 = ax3.bar(run_labels, run_dists, color="#00b4d8", edgecolor="#0f3460", linewidth=1.2)
+        ax3.set_title("Daily Running Distance (km)", fontsize=13, fontweight="bold", pad=8)
+        ax3.set_ylabel("Distance (km)")
+        if run_dists:
+            ax3.set_ylim(0, max(run_dists) * 1.25)
+            for bar, v in zip(bars3, run_dists):
+                ax3.text(bar.get_x() + bar.get_width() / 2,
+                         bar.get_height() + max(run_dists) * 0.02,
+                         f"{v:.1f}", ha="center", va="bottom",
+                         color="white", fontsize=9, fontweight="bold")
+
+    plt.tight_layout(pad=3)
+    buf = BytesIO()
+    plt.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return buf
 
 
 # ─── Conversation Memory ──────────────────────────────────────────────────────
@@ -281,7 +417,7 @@ SLEEP_TIPS = [
 
 # ─── Command Handlers ─────────────────────────────────────────────────────────
 
-@dispatcher.message_handler(commands=['start'])
+@dp.message(Command('start'))
 async def welcome(message: types.Message):
     welcome_text = (
         "🏋️‍♂️ *Welcome to FitBot!* 🏋️‍♀️\n\n"
@@ -297,10 +433,10 @@ async def welcome(message: types.Message):
         "🔹 Any fitness-related questions\n\n"
         "Type /help to see all commands! 🚀"
     )
-    await message.reply(welcome_text, parse_mode="Markdown")
+    await message.answer(welcome_text)
 
 
-@dispatcher.message_handler(commands=['help'])
+@dp.message(Command('help'))
 async def helper(message: types.Message):
     help_text = (
         "📋 *FitBot Commands:*\n\n"
@@ -322,20 +458,29 @@ async def helper(message: types.Message):
         "*── Daily ──*\n"
         "🥗 /nutrition — Nutrition tips\n"
         "💪 /motivation — Motivation quote\n"
-        "� /sleep — Sleep & recovery tips\n"
+        "💤 /sleep — Sleep & recovery tips\n"
         "🎯 /challenge — Daily fitness challenge\n"
-        "�🗑️ /clear — Clear conversation context\n\n"
+        "🗑️ /clear — Clear conversation context\n\n"
+        "*── Tracker ──*\n"
+        "🏋️ /log `<exercise> <weight>kg <sets>x<reps>` — Log a gym set\n"
+        "    e.g. `/log bench 80kg 3x10`\n"
+        "🏃 /run `<dist>km <time>min` — Log a run\n"
+        "    e.g. `/run 5km 28min`\n"
+        "📋 /today — Today's gym + running log\n"
+        "🏃 /runs — Today's runs only\n"
+        "📊 /summary — Weekly report + chart\n"
+        "🗑 /delete — Clear all your tracker data\n\n"
         "💬 Or just send me any fitness question!"
     )
-    await message.reply(help_text, parse_mode="Markdown")
+    await message.answer(help_text)
 
 
-@dispatcher.message_handler(commands=['workout'])
-async def workout(message: types.Message):
-    args = message.get_args().lower().strip()
+@dp.message(Command('workout'))
+async def workout(message: types.Message, command: CommandObject):
+    args = (command.args or "").lower().strip()
     if not args:
         available = ", ".join(WORKOUTS.keys())
-        await message.reply(
+        await message.answer(
             f"⚠️ Please specify a muscle group!\n\n"
             f"Usage: `/workout <muscle>`\n"
             f"Available: _{available}_",
@@ -346,7 +491,7 @@ async def workout(message: types.Message):
     plan = WORKOUTS.get(args)
     if not plan:
         available = ", ".join(WORKOUTS.keys())
-        await message.reply(
+        await message.answer(
             f"❌ Unknown muscle group: *{args}*\n\n"
             f"Available: _{available}_",
             parse_mode="Markdown"
@@ -361,14 +506,14 @@ async def workout(message: types.Message):
         f"{'─' * 30}\n"
         f"💡 _Rest 60-90 sec between sets. Stay hydrated!_ 💧"
     )
-    await message.reply(response_text, parse_mode="Markdown")
+    await message.answer(response_text)
 
 
-@dispatcher.message_handler(commands=['bmi'])
-async def bmi_calculator(message: types.Message):
-    args = message.get_args().strip().split()
+@dp.message(Command('bmi'))
+async def bmi_calculator(message: types.Message, command: CommandObject):
+    args = (command.args or "").strip().split()
     if len(args) != 2:
-        await message.reply(
+        await message.answer(
             "⚠️ Usage: `/bmi <weight_kg> <height_cm>`\n"
             "Example: `/bmi 70 175`",
             parse_mode="Markdown"
@@ -404,17 +549,17 @@ async def bmi_calculator(message: types.Message):
             f"{'─' * 30}\n"
             f"💡 _{tip}_"
         )
-        await message.reply(response_text, parse_mode="Markdown")
+        await message.answer(response_text)
 
     except ValueError:
-        await message.reply("❌ Please enter valid numbers.\nExample: `/bmi 70 175`", parse_mode="Markdown")
+        await message.answer("❌ Please enter valid numbers.\nExample: `/bmi 70 175`")
 
 
-@dispatcher.message_handler(commands=['calories'])
-async def calorie_calculator(message: types.Message):
-    args = message.get_args().strip().split()
+@dp.message(Command('calories'))
+async def calorie_calculator(message: types.Message, command: CommandObject):
+    args = (command.args or "").strip().split()
     if len(args) != 4:
-        await message.reply(
+        await message.answer(
             "⚠️ Usage: `/calories <weight_kg> <height_cm> <age> <gender>`\n"
             "Example: `/calories 70 175 25 male`",
             parse_mode="Markdown"
@@ -433,7 +578,7 @@ async def calorie_calculator(message: types.Message):
         elif gender in ("female", "f"):
             bmr = 10 * weight + 6.25 * height - 5 * age - 161
         else:
-            await message.reply("❌ Gender should be *male* or *female*.", parse_mode="Markdown")
+            await message.answer("❌ Gender should be *male* or *female*.")
             return
 
         response_text = (
@@ -451,16 +596,16 @@ async def calorie_calculator(message: types.Message):
             f"💡 _To lose weight: eat 300-500 kcal below your level._\n"
             f"💡 _To gain muscle: eat 300-500 kcal above your level._"
         )
-        await message.reply(response_text, parse_mode="Markdown")
+        await message.answer(response_text)
 
     except ValueError:
-        await message.reply(
+        await message.answer(
             "❌ Please enter valid numbers.\nExample: `/calories 70 175 25 male`",
             parse_mode="Markdown"
         )
 
 
-@dispatcher.message_handler(commands=['nutrition'])
+@dp.message(Command('nutrition'))
 async def nutrition(message: types.Message):
     tips = random.sample(NUTRITION_TIPS, min(5, len(NUTRITION_TIPS)))
     tips_text = "\n\n".join(tips)
@@ -471,26 +616,26 @@ async def nutrition(message: types.Message):
         f"{'─' * 30}\n"
         f"💬 _Ask me any nutrition question for personalized advice!_"
     )
-    await message.reply(response_text, parse_mode="Markdown")
+    await message.answer(response_text)
 
 
-@dispatcher.message_handler(commands=['motivation'])
+@dp.message(Command('motivation'))
 async def motivation(message: types.Message):
     quote = random.choice(MOTIVATION_QUOTES)
-    await message.reply(f"🔥 *Daily Motivation:*\n\n{quote}\n\n_Keep pushing! You got this!_ 🚀", parse_mode="Markdown")
+    await message.answer(f"🔥 *Daily Motivation:*\n\n{quote}\n\n_Keep pushing! You got this!_ 🚀")
 
 
-@dispatcher.message_handler(commands=['clear'])
+@dp.message(Command('clear'))
 async def clear(message: types.Message):
     reference.response = ""
-    await message.reply("🗑️ Conversation cleared! Start fresh 💪", parse_mode="Markdown")
+    await message.answer("🗑️ Conversation cleared! Start fresh 💪")
 
 
-@dispatcher.message_handler(commands=['water'])
-async def water_intake(message: types.Message):
-    args = message.get_args().strip().split()
+@dp.message(Command('water'))
+async def water_intake(message: types.Message, command: CommandObject):
+    args = (command.args or "").strip().split()
     if len(args) != 1:
-        await message.reply(
+        await message.answer(
             "⚠️ Usage: `/water <weight_kg>`\n"
             "Example: `/water 70`",
             parse_mode="Markdown"
@@ -515,16 +660,16 @@ async def water_intake(message: types.Message):
             f"• Drink before you feel thirsty\n"
             f"• Urine should be light yellow"
         )
-        await message.reply(response_text, parse_mode="Markdown")
+        await message.answer(response_text)
     except ValueError:
-        await message.reply("❌ Please enter a valid number.\nExample: `/water 70`", parse_mode="Markdown")
+        await message.answer("❌ Please enter a valid number.\nExample: `/water 70`")
 
 
-@dispatcher.message_handler(commands=['protein'])
-async def protein_intake(message: types.Message):
-    args = message.get_args().strip().split()
+@dp.message(Command('protein'))
+async def protein_intake(message: types.Message, command: CommandObject):
+    args = (command.args or "").strip().split()
     if len(args) != 1:
-        await message.reply(
+        await message.answer(
             "⚠️ Usage: `/protein <weight_kg>`\n"
             "Example: `/protein 70`",
             parse_mode="Markdown"
@@ -550,16 +695,16 @@ async def protein_intake(message: types.Message):
             f"• Paneer: 18g\n"
             f"• Whey protein scoop: ~25g"
         )
-        await message.reply(response_text, parse_mode="Markdown")
+        await message.answer(response_text)
     except ValueError:
-        await message.reply("❌ Please enter a valid number.\nExample: `/protein 70`", parse_mode="Markdown")
+        await message.answer("❌ Please enter a valid number.\nExample: `/protein 70`")
 
 
-@dispatcher.message_handler(commands=['bodyfat'])
-async def bodyfat_calculator(message: types.Message):
-    args = message.get_args().strip().split()
+@dp.message(Command('bodyfat'))
+async def bodyfat_calculator(message: types.Message, command: CommandObject):
+    args = (command.args or "").strip().split()
     if len(args) != 4:
-        await message.reply(
+        await message.answer(
             "⚠️ Usage: `/bodyfat <gender> <waist_cm> <neck_cm> <height_cm>`\n"
             "Example: `/bodyfat male 85 38 175`",
             parse_mode="Markdown"
@@ -577,7 +722,7 @@ async def bodyfat_calculator(message: types.Message):
         elif gender in ("female", "f"):
             bf = 495 / (1.29579 - 0.35004 * math.log10(waist + 0 - neck) + 0.22100 * math.log10(height)) - 450
         else:
-            await message.reply("❌ Gender should be *male* or *female*.", parse_mode="Markdown")
+            await message.answer("❌ Gender should be *male* or *female*.")
             return
 
         if gender in ("male", "m"):
@@ -603,17 +748,17 @@ async def bodyfat_calculator(message: types.Message):
             f"{'─' * 30}\n"
             f"💡 _US Navy method — for best accuracy, measure in the morning._"
         )
-        await message.reply(response_text, parse_mode="Markdown")
+        await message.answer(response_text)
     except ValueError:
-        await message.reply("❌ Please enter valid numbers.\nExample: `/bodyfat male 85 38 175`", parse_mode="Markdown")
+        await message.answer("❌ Please enter valid numbers.\nExample: `/bodyfat male 85 38 175`")
 
 
-@dispatcher.message_handler(commands=['stretch'])
-async def stretch(message: types.Message):
-    args = message.get_args().lower().strip()
+@dp.message(Command('stretch'))
+async def stretch(message: types.Message, command: CommandObject):
+    args = (command.args or "").lower().strip()
     if not args:
         available = ", ".join(STRETCHING_ROUTINES.keys())
-        await message.reply(
+        await message.answer(
             f"⚠️ Please specify a stretch type!\n\n"
             f"Usage: `/stretch <type>`\n"
             f"Available: _{available}_",
@@ -623,7 +768,7 @@ async def stretch(message: types.Message):
     routine = STRETCHING_ROUTINES.get(args)
     if not routine:
         available = ", ".join(STRETCHING_ROUTINES.keys())
-        await message.reply(
+        await message.answer(
             f"❌ Unknown stretch type: *{args}*\n\n"
             f"Available: _{available}_",
             parse_mode="Markdown"
@@ -637,10 +782,10 @@ async def stretch(message: types.Message):
         f"{'─' * 30}\n"
         f"💡 _Hold each stretch gently. Never bounce!_ 🧘"
     )
-    await message.reply(response_text, parse_mode="Markdown")
+    await message.answer(response_text)
 
 
-@dispatcher.message_handler(commands=['warmup'])
+@dp.message(Command('warmup'))
 async def warmup(message: types.Message):
     exercises = "\n".join(WARMUP_ROUTINES)
     response_text = (
@@ -650,15 +795,15 @@ async def warmup(message: types.Message):
         f"{'─' * 30}\n"
         f"💡 _Always warm up before lifting to prevent injuries!_ 🛡️"
     )
-    await message.reply(response_text, parse_mode="Markdown")
+    await message.answer(response_text)
 
 
-@dispatcher.message_handler(commands=['cardio'])
-async def cardio(message: types.Message):
-    args = message.get_args().lower().strip()
+@dp.message(Command('cardio'))
+async def cardio(message: types.Message, command: CommandObject):
+    args = (command.args or "").lower().strip()
     if not args:
         available = ", ".join(CARDIO_PLANS.keys())
-        await message.reply(
+        await message.answer(
             f"⚠️ Please specify a level!\n\n"
             f"Usage: `/cardio <level>`\n"
             f"Available: _{available}_",
@@ -668,7 +813,7 @@ async def cardio(message: types.Message):
     plan = CARDIO_PLANS.get(args)
     if not plan:
         available = ", ".join(CARDIO_PLANS.keys())
-        await message.reply(
+        await message.answer(
             f"❌ Unknown level: *{args}*\n\n"
             f"Available: _{available}_",
             parse_mode="Markdown"
@@ -682,10 +827,10 @@ async def cardio(message: types.Message):
         f"{'─' * 30}\n"
         f"📌 _{plan['note']}_"
     )
-    await message.reply(response_text, parse_mode="Markdown")
+    await message.answer(response_text)
 
 
-@dispatcher.message_handler(commands=['sleep'])
+@dp.message(Command('sleep'))
 async def sleep_tips(message: types.Message):
     tips = random.sample(SLEEP_TIPS, min(5, len(SLEEP_TIPS)))
     tips_text = "\n\n".join(tips)
@@ -696,10 +841,10 @@ async def sleep_tips(message: types.Message):
         f"{'─' * 30}\n"
         f"💤 _Good sleep = better gains!_"
     )
-    await message.reply(response_text, parse_mode="Markdown")
+    await message.answer(response_text)
 
 
-@dispatcher.message_handler(commands=['challenge'])
+@dp.message(Command('challenge'))
 async def daily_challenge(message: types.Message):
     # Use day of year to give a consistent daily challenge
     day_index = datetime.now().timetuple().tm_yday % len(DAILY_CHALLENGES)
@@ -713,18 +858,198 @@ async def daily_challenge(message: types.Message):
         f"🎲 *Bonus Challenge:*\n{random_bonus}\n\n"
         f"_Complete both and you're a legend!_ 🏆"
     )
-    await message.reply(response_text, parse_mode="Markdown")
+    await message.answer(response_text)
+
+
+# ─── Tracker Handlers ────────────────────────────────────────────────────────
+
+@dp.message(Command('log'))
+async def log_workout(message: types.Message, command: CommandObject):
+    args = (command.args or "").strip().split()
+    try:
+        weight_token = next(t for t in reversed(args) if "kg" in t.lower())
+        sets_reps_token = args[-1]
+        w_idx = args.index(weight_token)
+        exercise = " ".join(args[:w_idx]).strip()
+        weight_kg = float(weight_token.lower().replace("kg", ""))
+        sets, reps = map(int, sets_reps_token.lower().split("x"))
+        if not exercise:
+            raise ValueError
+    except Exception:
+        await message.answer(
+            "❌ Format: `/log <exercise> <weight>kg <sets>x<reps>`\n"
+            "Example: `/log bench 80kg 3x10`"
+        )
+        return
+    vol = sets * reps * weight_kg
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO workouts (user_id,date,exercise,sets,reps,weight_kg) VALUES (?,?,?,?,?,?)",
+            (message.from_user.id, _today(), exercise, sets, reps, weight_kg)
+        )
+        conn.commit()
+    await message.answer(
+        f"✅ Logged *{exercise}*\n"
+        f"  {sets}×{reps} @ {weight_kg}kg\n"
+        f"  Volume: *{vol:.0f} kg*"
+    )
+
+
+@dp.message(Command('run'))
+async def log_run(message: types.Message, command: CommandObject):
+    args = (command.args or "").strip().split()
+    try:
+        dist_token = next(t for t in args if "km" in t.lower())
+        dur_token  = next(t for t in args if "min" in t.lower())
+        dist = float(dist_token.lower().replace("km", ""))
+        dur  = float(dur_token.lower().replace("min", ""))
+        if dist <= 0 or dur <= 0:
+            raise ValueError
+    except Exception:
+        await message.answer(
+            "❌ Format: `/run <distance>km <duration>min`\n"
+            "Example: `/run 5km 28min`"
+        )
+        return
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO runs (user_id,date,distance_km,duration_min) VALUES (?,?,?,?)",
+            (message.from_user.id, _today(), dist, dur)
+        )
+        conn.commit()
+    await message.answer(
+        f"🏃 Logged run: *{dist}km* in *{dur}min*\n"
+        f"  Pace: _{_pace_str(dist, dur)}_"
+    )
+
+
+@dp.message(Command('today'))
+async def today_log(message: types.Message):
+    uid = message.from_user.id
+    with sqlite3.connect(DB_PATH) as conn:
+        gym_rows = conn.execute(
+            "SELECT exercise,sets,reps,weight_kg FROM workouts WHERE user_id=? AND date=? ORDER BY id",
+            (uid, _today())
+        ).fetchall()
+        run_rows = conn.execute(
+            "SELECT distance_km,duration_min FROM runs WHERE user_id=? AND date=? ORDER BY id",
+            (uid, _today())
+        ).fetchall()
+
+    if not gym_rows and not run_rows:
+        await message.answer(
+            "No activity today.\nUse `/log` for gym or `/run` for running."
+        )
+        return
+
+    lines = [f"📋 *Today's Activity ({_today()})*\n"]
+    if gym_rows:
+        lines.append("🏋️ *Gym:*")
+        total_vol = 0
+        for ex, s, r, w in gym_rows:
+            vol = s * r * w
+            total_vol += vol
+            lines.append(f"• *{ex}* — {s}×{r} @ {w}kg _(vol: {vol:.0f}kg)_")
+        lines.append(f"Total Volume: *{total_vol:.0f} kg*\n")
+    if run_rows:
+        lines.append("🏃 *Running:*")
+        td, tmin = 0.0, 0.0
+        for dist, dur in run_rows:
+            td += dist; tmin += dur
+            lines.append(f"• {dist}km in {dur}min _(pace: {_pace_str(dist, dur)})_")
+        lines.append(f"Total: *{td:.1f}km* in *{tmin:.0f}min*  avg pace: _{_pace_str(td, tmin)}_")
+    await message.answer("\n".join(lines))
+
+
+@dp.message(Command('runs'))
+async def today_runs(message: types.Message):
+    uid = message.from_user.id
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT distance_km,duration_min FROM runs WHERE user_id=? AND date=? ORDER BY id",
+            (uid, _today())
+        ).fetchall()
+    if not rows:
+        await message.answer("No runs today. Use `/run 5km 30min` to log one.")
+        return
+    lines = [f"🏃 *Today's Runs ({_today()})*\n"]
+    td, tmin = 0.0, 0.0
+    for i, (dist, dur) in enumerate(rows, 1):
+        td += dist; tmin += dur
+        lines.append(f"• Run {i}: {dist}km in {dur}min _(pace: {_pace_str(dist, dur)})_")
+    lines.append(f"\n📊 Total: *{td:.1f}km* in *{tmin:.0f}min*")
+    lines.append(f"Avg Pace: _{_pace_str(td, tmin)}_")
+    await message.answer("\n".join(lines))
+
+
+@dp.message(Command('summary'))
+async def weekly_summary(message: types.Message):
+    uid = message.from_user.id
+    gym_rows = _get_week_workouts(uid)
+    run_rows  = _get_week_runs(uid)
+
+    if not gym_rows and not run_rows:
+        await message.answer("No activity in the past 7 days. Start with `/log` or `/run`!")
+        return
+
+    by_date     = defaultdict(list)
+    by_exercise = defaultdict(float)
+    for date, ex, s, r, w in gym_rows:
+        vol = s * r * w
+        by_date[date].append((ex, s, r, w))
+        by_exercise[ex] += vol
+
+    run_by_date = defaultdict(float)
+    for date, dist, _ in run_rows:
+        run_by_date[date] += dist
+
+    lines = ["📊 *Weekly Summary (last 7 days)*\n"]
+    if gym_rows:
+        grand_vol = sum(by_exercise.values())
+        lines.append(f"🏋️ Gym sessions: *{len(by_date)}*")
+        lines.append(f"Total volume: *{grand_vol:.0f} kg*")
+        lines.append("\n*Volume by exercise:*")
+        for ex, vol in sorted(by_exercise.items(), key=lambda x: -x[1]):
+            lines.append(f"  • {ex}: {vol:.0f} kg")
+        lines.append("\n*Daily gym breakdown:*")
+        for d in sorted(by_date):
+            day_vol = sum(s * r * w for _, s, r, w in by_date[d])
+            lines.append(f"  📅 {datetime.strptime(d, '%Y-%m-%d').strftime('%a %d %b')} — {day_vol:.0f} kg")
+
+    if run_rows:
+        total_dist = sum(r[1] for r in run_rows)
+        total_dur  = sum(r[2] for r in run_rows)
+        lines.append("\n🏃 *Running:*")
+        lines.append(f"  🗺 Distance: *{total_dist:.1f} km*")
+        lines.append(f"  ⏱ Time: *{total_dur:.0f} min*")
+        lines.append(f"  🚀 Avg Pace: _{_pace_str(total_dist, total_dur)}_")
+        for d in sorted(run_by_date):
+            lines.append(f"  📅 {datetime.strptime(d, '%Y-%m-%d').strftime('%a %d %b')} — {run_by_date[d]:.1f}km")
+
+    await message.answer("\n".join(lines))
+    chart = _build_chart(by_date, by_exercise, run_by_date)
+    await message.answer_photo(chart, caption="📈 Your 7-day fitness chart")
+
+
+@dp.message(Command('delete'))
+async def delete_tracker(message: types.Message):
+    uid = message.from_user.id
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM workouts WHERE user_id=?", (uid,))
+        conn.execute("DELETE FROM runs WHERE user_id=?", (uid,))
+        conn.commit()
+    await message.answer("🗑 All your workout and running data has been deleted.")
 
 
 # ─── AI Chat Handler (Fitness Expert) ─────────────────────────────────────────
 
-@dispatcher.message_handler()
+@dp.message()
 async def fitness_chat(message: types.Message):
     """Handles free-text messages with a fitness-expert AI persona."""
     print(f">>> User: \n\t {message.text}")
 
     try:
-        response = openai.ChatCompletion.create(
+        response = await client.chat.completions.create(
             model=model_name,
             messages=[
                 {"role": "system", "content": FITNESS_SYSTEM_PROMPT},
@@ -733,13 +1058,13 @@ async def fitness_chat(message: types.Message):
             ]
         )
 
-        reference.response = response['choices'][0]['message']['content']
+        reference.response = response.choices[0].message.content
         print(f">>> FitBot: \n\t{reference.response}")
         await bot.send_message(chat_id=message.chat.id, text=reference.response)
 
     except Exception as e:
         print(f">>> OpenAI Error: {e}")
-        await message.reply(
+        await message.answer(
             "⚠️ AI chat is temporarily unavailable.\n\n"
             "But you can still use all built-in commands!\n"
             "Type /help to see what's available 💪",
@@ -750,4 +1075,4 @@ async def fitness_chat(message: types.Message):
 # ─── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     print("🏋️ FitBot is starting...")
-    executor.start_polling(dispatcher, skip_updates=True)
+    asyncio.run(dp.start_polling(bot))
