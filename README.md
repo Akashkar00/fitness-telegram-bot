@@ -91,6 +91,16 @@ TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 python main.py
 ```
 
+### 8. Docker Build & Run 
+
+```bash
+# Docker Build command:
+docker build -t telegram-telebot .
+
+# Run the Docker container replacing the API key and bot token with your actual values:
+docker run --rm -e OPENAI_API_KEY=your_openai_api_key_here -e TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here telegram-telebot
+```
+
 ---
 
 ## Bot Commands
